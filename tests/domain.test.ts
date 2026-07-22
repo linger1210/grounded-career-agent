@@ -15,6 +15,7 @@ import {
   detectEvidenceConflicts,
   enforceQuota,
   hasConsent,
+  isSafeEmployerUrl,
   learnPreferenceFromFeedback,
   normalizeAnnualSalary,
   parsePreferenceSentence,
@@ -25,6 +26,7 @@ import {
   validateResumeClaims,
 } from "../lib/domain";
 import { classifyConversationFormat, isSupportedCareerFile, previewTextContent } from "../lib/file-parsing";
+import { normalizeGreenhouseBoardToken } from "../lib/job-sources/greenhouse";
 
 test("file parsing accepts each promised MVP import extension and previews text safely", () => {
   for (const file of ["resume.pdf", "resume.docx", "notes.txt", "portfolio.md", "deck.pptx", "skills.xlsx", "jobs.csv", "certificate.png", "chat.json", "export.html"]) {
@@ -93,6 +95,22 @@ test("explicit no-sponsorship language creates a hard visa flag", () => {
 test("job deduplication uses canonical URL, requisition, and role-location identity", () => {
   const duplicate = { ...initialAppState.jobs[0], id: "duplicate", canonicalUrl: `${initialAppState.jobs[0].canonicalUrl}?ref=feed` };
   assert.equal(deduplicateJobs([...initialAppState.jobs, duplicate]).length, initialAppState.jobs.length);
+});
+
+test("real employer handoff accepts only secure public URLs", () => {
+  assert.equal(isSafeEmployerUrl("https://jobs.example.com/apply/123"), true);
+  assert.equal(isSafeEmployerUrl("http://jobs.example.com/apply/123"), false);
+  assert.equal(isSafeEmployerUrl("javascript:alert(1)"), false);
+  assert.equal(isSafeEmployerUrl("https://localhost/apply"), false);
+  assert.equal(isSafeEmployerUrl("https://127.0.0.1/apply"), false);
+  assert.equal(isSafeEmployerUrl("https://192.168.1.10/apply"), false);
+});
+
+test("Greenhouse connections accept official board names and URLs only", () => {
+  assert.equal(normalizeGreenhouseBoardToken("example-company"), "example-company");
+  assert.equal(normalizeGreenhouseBoardToken("https://boards.greenhouse.io/example-company/jobs/123"), "example-company");
+  assert.equal(normalizeGreenhouseBoardToken("https://job-boards.greenhouse.io/example-company"), "example-company");
+  assert.throws(() => normalizeGreenhouseBoardToken("https://evil.example/example-company"));
 });
 
 test("match explanations contain only the requested concise fields and three gaps", () => {

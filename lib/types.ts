@@ -290,6 +290,8 @@ export interface Application {
   followUpDate?: string;
   failureReason?: string;
   simulated: boolean;
+  jobUrl?: string;
+  submittedByUser?: boolean;
 }
 
 export interface ApplicationAnswer {

@@ -14,6 +14,7 @@ import {
   ChevronRight,
   CircleDollarSign,
   Download,
+  ExternalLink,
   FileCheck2,
   FileText,
   FolderOpen,
@@ -23,6 +24,7 @@ import {
   Info,
   KeyRound,
   Laptop2,
+  Link2,
   LockKeyhole,
   MessageSquareText,
   Pause,
@@ -43,7 +45,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { initialAppState } from "../lib/demo";
-import { parsePreferenceSentence } from "../lib/domain";
+import { deduplicateJobs, isSafeEmployerUrl, parsePreferenceSentence } from "../lib/domain";
 import type {
   AppState,
   ApplicationMode,
@@ -582,10 +584,115 @@ function MetricCard({ label, value, detail, icon: Icon, accent }: { label: strin
   return <article className="metric-card"><div className={`metric-icon ${accent}`}><Icon size={20} /></div><span>{label}</span><strong>{value}</strong><p>{detail}</p></article>;
 }
 
+function provisionalMatch(job: JobPosting, state: AppState): JobMatch {
+  const hardVisaBlock = job.visaFit === "Sponsorship clearly unavailable" || job.visaFit === "Existing work authorization required";
+  const targetWords = state.preferences.targetRoles.flatMap((role) => role.toLowerCase().split(/\s+/)).filter((word) => word.length > 3);
+  const title = job.title.toLowerCase();
+  const roleOverlap = targetWords.some((word) => title.includes(word));
+  return {
+    id: `match-${job.id}`,
+    jobId: job.id,
+    decision: hardVisaBlock ? "Skip" : "Apply",
+    interviewChance: hardVisaBlock ? "Low" : roleOverlap ? "Medium" : "Low",
+    resumeVersion: "Personal resume required",
+    seniorityFit: "Needs resume review",
+    salaryFit: job.salaryLow ? "Listed by employer" : "Not listed",
+    visaFit: job.visaFit,
+    gaps: ["Upload your real resume for a personalized assessment"],
+    evidenceQuality: "Low",
+    reasons: [
+      "This job comes from an official employer page.",
+      hardVisaBlock ? "The posting contains a confirmed work-authorization blocker." : "No confirmed hard blocker was found in the imported posting.",
+      "Fit remains provisional until your real resume is analyzed.",
+    ],
+  };
+}
+
 function JobsView({ state, setState, showToast }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; showToast: (message: string, tone?: "success" | "warning" | "neutral") => void }) {
   const [selected, setSelected] = useState(state.jobs[0].id);
   const [chanceFilter, setChanceFilter] = useState("All fits");
   const [query, setQuery] = useState("");
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [company, setCompany] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [jobLocation, setJobLocation] = useState("");
+  const [jobUrl, setJobUrl] = useState("");
+  const [boardCompany, setBoardCompany] = useState("");
+  const [boardToken, setBoardToken] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
+  const liveJobs = state.jobs.filter((job) => job.sourceKind !== "mock").length;
+
+  const addJobs = (incoming: JobPosting[]) => {
+    const safeIncoming = incoming.filter((job) => isSafeEmployerUrl(job.canonicalUrl));
+    const combined = deduplicateJobs([...state.jobs, ...safeIncoming]);
+    const additions = combined.filter((job) => !state.jobs.some((existing) => existing.id === job.id || existing.canonicalUrl.replace(/\?.*$/, "") === job.canonicalUrl.replace(/\?.*$/, "")));
+    if (additions.length === 0) return 0;
+    setState((current) => ({
+      ...current,
+      jobs: deduplicateJobs([...current.jobs, ...additions]),
+      matches: [...current.matches, ...additions.map((job) => provisionalMatch(job, current))],
+    }));
+    setSelected(additions[0].id);
+    return additions.length;
+  };
+
+  const addOfficialJob = (event: React.FormEvent) => {
+    event.preventDefault();
+    setConnectionError("");
+    if (!company.trim() || !jobTitle.trim() || !isSafeEmployerUrl(jobUrl)) {
+      setConnectionError("Enter the employer, job title, and a secure official job URL.");
+      return;
+    }
+    const normalizedUrl = new URL(jobUrl).toString();
+    const role = jobTitle.trim();
+    const job: JobPosting = {
+      id: `official-${crypto.randomUUID()}`,
+      sourceId: "official-employer-link",
+      sourceLabel: "Official employer application page",
+      sourceKind: "public-career-page",
+      company: company.trim(),
+      title: role,
+      location: jobLocation.trim() || "Location not specified",
+      country: jobLocation.trim() || "Not specified",
+      remotePolicy: /remote/i.test(jobLocation) ? "Remote" : /hybrid/i.test(jobLocation) ? "Hybrid" : "On-site",
+      visaFit: "Sponsorship not mentioned",
+      seniority: /lead/i.test(role) ? "Lead" : /manager/i.test(role) ? "Manager" : /senior|staff|principal/i.test(role) ? "Senior" : "Mid-level",
+      skills: [],
+      gaps: [],
+      requisitionId: new URL(normalizedUrl).searchParams.get("gh_jid") ?? new URL(normalizedUrl).pathname.split("/").filter(Boolean).at(-1) ?? crypto.randomUUID(),
+      canonicalUrl: normalizedUrl,
+      description: "Imported from an official employer application link. Review the employer page for the complete requirements.",
+      postedAt: new Date().toISOString(),
+      employmentType: "Not specified",
+      industry: "Not specified",
+      applicationSupport: "external",
+    };
+    const added = addJobs([job]);
+    if (added === 0) return setConnectionError("This job is already in your tracker.");
+    setCompany(""); setJobTitle(""); setJobLocation(""); setJobUrl("");
+    showToast("Official employer job added. Grounded will never claim it was submitted until you confirm.", "success");
+  };
+
+  const connectGreenhouse = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setConnectionError("");
+    if (!boardCompany.trim() || !boardToken.trim()) return setConnectionError("Enter the employer name and its Greenhouse board name or URL.");
+    setConnecting(true);
+    try {
+      const response = await fetch(`/api/jobs?board=${encodeURIComponent(boardToken)}&company=${encodeURIComponent(boardCompany)}`);
+      const payload = await response.json() as { error?: string; jobs?: JobPosting[] };
+      if (!response.ok) throw new Error(payload.error ?? "The employer board could not be connected.");
+      const added = addJobs(payload.jobs ?? []);
+      if (added === 0) throw new Error("No new public jobs were found on that board.");
+      showToast(`${added} live employer ${added === 1 ? "job" : "jobs"} added`, "success");
+      setBoardCompany(""); setBoardToken("");
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "The employer board could not be connected.");
+    } finally {
+      setConnecting(false);
+    }
+  };
   const jobs = state.jobs.filter((job) => {
     const chance = chanceFilter === "All fits" || state.matches.find((match) => match.jobId === job.id)?.interviewChance === chanceFilter;
     return chance && `${job.title} ${job.company}`.toLowerCase().includes(query.toLowerCase());
@@ -594,7 +701,29 @@ function JobsView({ state, setState, showToast }: { state: AppState; setState: R
   const match = state.matches.find((item) => item.jobId === selectedJob.id)!;
   return (
     <>
-      <PageHeading eyebrow="Job discovery" title="Jobs worth your time" detail="Recommendations stay realistic. Low-chance roles remain visible when there is no hard blocker." action={<span className="source-badge mock"><Info size={14} /> Showing seeded demonstration jobs</span>} />
+      <PageHeading eyebrow="Job discovery" title="Jobs worth your time" detail="Add an official job link or connect a public employer board. You always finish a real application on the employer's website." action={<button className="button secondary" onClick={() => setConnectOpen((open) => !open)}><Link2 size={16} /> {connectOpen ? "Close connections" : "Connect employer jobs"}</button>} />
+      {connectOpen && <section className="job-connector panel">
+        <div className="connector-heading"><div><span className="eyebrow">Real employer connections</span><h2>Add live jobs without sharing your data</h2><p>No résumé or personal information is sent while connecting a job source.</p></div><span className="source-badge live">{liveJobs} live {liveJobs === 1 ? "job" : "jobs"}</span></div>
+        <div className="connector-grid">
+          <form onSubmit={addOfficialJob}>
+            <div><strong>Add any official job</strong><span>Works with Workday, LinkedIn, Lever, Greenhouse, and employer career sites.</span></div>
+            <label>Employer<input value={company} onChange={(event) => setCompany(event.target.value)} placeholder="Example Company" /></label>
+            <label>Job title<input value={jobTitle} onChange={(event) => setJobTitle(event.target.value)} placeholder="Senior Product Analyst" /></label>
+            <label>Location <small>Optional</small><input value={jobLocation} onChange={(event) => setJobLocation(event.target.value)} placeholder="Singapore or Remote" /></label>
+            <label>Official job URL<input type="url" value={jobUrl} onChange={(event) => setJobUrl(event.target.value)} placeholder="https://company.com/jobs/..." /></label>
+            <button className="button primary small" type="submit">Add official job <ArrowRight size={15} /></button>
+          </form>
+          <form onSubmit={connectGreenhouse}>
+            <div><strong>Import a Greenhouse employer board</strong><span>Use the company part from boards.greenhouse.io/company, or paste the full board URL.</span></div>
+            <label>Employer<input value={boardCompany} onChange={(event) => setBoardCompany(event.target.value)} placeholder="Example Company" /></label>
+            <label>Board name or URL<input value={boardToken} onChange={(event) => setBoardToken(event.target.value)} placeholder="company or https://boards.greenhouse.io/company" /></label>
+            <button className="button secondary small" disabled={connecting} type="submit">{connecting ? <><RefreshCw className="spin" size={15} /> Connecting…</> : <><Globe2 size={15} /> Import public jobs</>}</button>
+            <p className="connector-note"><ShieldCheck size={14} /> Discovery uses Greenhouse&apos;s official public job-board interface. Applications remain on the employer site.</p>
+          </form>
+        </div>
+        {connectionError && <div className="connector-error" role="alert"><AlertCircle size={16} /> {connectionError}</div>}
+      </section>}
+      <div className="live-source-summary"><span className="source-badge live"><Globe2 size={14} /> {liveJobs} live</span><span className="source-badge mock"><Info size={14} /> {state.jobs.length - liveJobs} demonstration</span></div>
       <div className="filter-bar"><div className="search-field"><Search size={17} /><input aria-label="Search recommended jobs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search role or company" /></div><select aria-label="Filter by interview chance" value={chanceFilter} onChange={(event) => setChanceFilter(event.target.value)}><option>All fits</option><option>High</option><option>Medium</option><option>Low</option></select></div>
       <div className="jobs-layout">
         <div className="job-list" aria-label="Recommended jobs">
@@ -613,11 +742,12 @@ function JobListCard({ job, match, selected, onClick }: { job: JobPosting; match
 
 function JobDetail({ job, match, state, setState, showToast }: { job: JobPosting; match: JobMatch; state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; showToast: (message: string, tone?: "success" | "warning" | "neutral") => void }) {
   const existing = state.applications.find((app) => app.jobId === job.id);
+  const externalUrl = job.sourceKind !== "mock" && isSafeEmployerUrl(job.canonicalUrl) ? job.canonicalUrl : undefined;
   const prepare = () => {
     if (match.decision === "Skip") return showToast("This employer explicitly refuses sponsorship, so preparation is blocked.", "warning");
     if (existing) return showToast("This job is already in your tracker", "neutral");
-    setState((current) => ({ ...current, applications: [...current.applications, { id: crypto.randomUUID(), jobId: job.id, company: job.company, jobTitle: job.title, location: job.location, source: job.sourceLabel, requisitionId: job.requisitionId, resumeVersion: match.resumeVersion, status: "Needs Review", simulated: true }] }));
-    showToast("Truthful application prepared for review", "success");
+    setState((current) => ({ ...current, applications: [...current.applications, { id: crypto.randomUUID(), jobId: job.id, company: job.company, jobTitle: job.title, location: job.location, source: job.sourceLabel, requisitionId: job.requisitionId, resumeVersion: match.resumeVersion, status: "Needs Review", simulated: job.sourceKind === "mock", jobUrl: externalUrl }] }));
+    showToast(job.sourceKind === "mock" ? "Truthful demonstration application prepared" : "Real employer handoff prepared for your review", "success");
   };
   return (
     <section className="job-detail panel">
@@ -631,7 +761,7 @@ function JobDetail({ job, match, state, setState, showToast }: { job: JobPosting
       <div className="detail-section"><h3>Why this recommendation</h3><ul>{match.reasons.slice(0, 3).map((reason) => <li key={reason}><CheckCircle2 size={16} /> {reason}</li>)}</ul></div>
       {match.gaps.length > 0 && <div className="detail-section gaps"><h3>Evidence gaps</h3><div>{match.gaps.slice(0, 3).map((gap) => <span key={gap}>{gap}</span>)}</div></div>}
       <div className="career-change-note"><Sparkles size={17} /><p>{job.id === "job-marina" ? "You can apply. Estimated interview chance: Low. Transferable strengths: stakeholder management and analytics. Build evidence in experimentation and one product case study." : "Resume wording will use only confirmed, employer-approved evidence."}</p></div>
-      <div className="job-detail-actions"><button className="button primary" disabled={Boolean(existing) || match.decision === "Skip"} onClick={prepare}>{existing ? "Already in tracker" : "Prepare for review"} <ArrowRight size={16} /></button><button className="button secondary" onClick={() => showToast(job.applicationSupport === "external" ? "This source supports discovery only. Application remains on the employer site." : "Job details opened in the safe demo flow.")}>View source</button></div>
+      <div className="job-detail-actions"><button className="button primary" disabled={Boolean(existing) || match.decision === "Skip"} onClick={prepare}>{existing ? "Already in tracker" : "Prepare for review"} <ArrowRight size={16} /></button>{externalUrl ? <a className="button secondary" href={externalUrl} target="_blank" rel="noreferrer">View official job <ExternalLink size={16} /></a> : <button className="button secondary" onClick={() => showToast("This is a demonstration job; no employer page is opened.")}>View source</button>}</div>
       <div className="feedback-row"><span>Was this recommendation useful?</span><button aria-label="Mark recommendation relevant" onClick={() => addFeedback(state, setState, "job", job.id, "Relevant", showToast)}><ThumbsUp size={15} /> Relevant</button><button aria-label="Mark recommendation not relevant" onClick={() => addFeedback(state, setState, "job", job.id, "Not Relevant", showToast)}><ThumbsDown size={15} /> Not relevant</button><button onClick={() => addFeedback(state, setState, "job", job.id, "Wrong Seniority", showToast)}>Wrong seniority</button></div>
     </section>
   );
@@ -645,16 +775,33 @@ function ApplicationsView({ state, setState, showToast }: { state: AppState; set
   const [selected, setSelected] = useState(state.applications[0]?.id ?? "");
   const [filter, setFilter] = useState<"All" | ApplicationStatus>("All");
   const [confirmedApps, setConfirmedApps] = useState<string[]>([]);
+  const [openedApps, setOpenedApps] = useState<string[]>([]);
+  const [completedApps, setCompletedApps] = useState<string[]>([]);
   const application = state.applications.find((item) => item.id === selected) ?? state.applications[0];
+  const applicationJob = application ? state.jobs.find((job) => job.id === application.jobId) : undefined;
+  const employerUrl = application && isSafeEmployerUrl(application.jobUrl ?? applicationJob?.canonicalUrl ?? "") ? application.jobUrl ?? applicationJob?.canonicalUrl : undefined;
+  const isExternal = Boolean(application && !application.simulated && employerUrl);
   const visibleApplications = filter === "All" ? state.applications : state.applications.filter((item) => item.status === filter);
   const updateStatus = (id: string, status: ApplicationStatus) => setState((current) => ({ ...current, applications: current.applications.map((app) => app.id === id ? { ...app, status, applicationDate: status === "Submitted" ? new Date().toISOString().slice(0, 10) : app.applicationDate } : app) }));
-  const submit = () => {
+  const simulateSubmission = () => {
     if (!application) return;
     if (state.schedule.paused) return showToast("Automation is paused. Resume it before submitting.", "warning");
     if (!confirmedApps.includes(application.id) && application.status !== "Submitted") return showToast("Confirm the earliest start date before submission", "warning");
     updateStatus(application.id, "Submitted");
     setState((current) => ({ ...current, auditEvents: [...current.auditEvents, { id: crypto.randomUUID(), userId: current.user.id, action: "application.simulated_submission", targetId: application.id, result: "allowed", model: "demo-structured-provider", promptVersion: "application-v1", evidenceIds: ["ev-impact", "ev-leadership", "ev-skills"], createdAt: new Date().toISOString() }] }));
     showToast("Simulated application submitted and added to the audit history", "success");
+  };
+  const recordExternalSubmission = () => {
+    if (!application || !isExternal) return;
+    if (!openedApps.includes(application.id)) return showToast("Open the official employer application first", "warning");
+    if (!completedApps.includes(application.id)) return showToast("Confirm that you completed and sent the employer form", "warning");
+    setState((current) => ({
+      ...current,
+      applications: current.applications.map((app) => app.id === application.id ? { ...app, status: "Submitted", applicationDate: new Date().toISOString().slice(0, 10), submittedByUser: true } : app),
+      subscription: { ...current.subscription, usage: { ...current.subscription.usage, applications: current.subscription.usage.applications + (application.status === "Submitted" ? 0 : 1) } },
+      auditEvents: [...current.auditEvents, { id: crypto.randomUUID(), userId: current.user.id, action: "application.user_confirmed_external_submission", targetId: application.id, result: "allowed", evidenceIds: [], createdAt: new Date().toISOString() }],
+    }));
+    showToast("Recorded as submitted after your confirmation", "success");
   };
   const exportTracker = () => {
     const rows = [["Company", "Job title", "Location", "Status", "Source", "Requisition ID", "Application date"], ...state.applications.map((item) => [item.company, item.jobTitle, item.location, item.status, item.source, item.requisitionId, item.applicationDate ?? ""])];
@@ -664,18 +811,37 @@ function ApplicationsView({ state, setState, showToast }: { state: AppState; set
   };
   return (
     <>
-      <PageHeading eyebrow="Application tracker" title="Every application, one honest record" detail="The demo source simulates submission. No real employer receives data." action={<button className="button secondary" onClick={exportTracker}><Download size={16} /> Export tracker</button>} />
+      <PageHeading eyebrow="Application tracker" title="Every application, one honest record" detail="Real applications open on the employer’s official site. Grounded records Submitted only after you confirm sending it." action={<button className="button secondary" onClick={exportTracker}><Download size={16} /> Export tracker</button>} />
       <div className="status-tabs">{(["All", "Needs Review", "Submitted", "Interview", "Offer"] as const).map((status) => <button key={status} className={filter === status ? "active" : ""} onClick={() => setFilter(status)}>{status} <span>{status === "All" ? state.applications.length : state.applications.filter((app) => app.status === status).length}</span></button>)}</div>
       {state.applications.length === 0 ? <EmptyState icon={BriefcaseBusiness} title="No applications yet" detail="Prepare a recommended job and it will appear here." /> : <div className="applications-layout">
         <div className="application-table-wrap panel"><table className="application-table"><thead><tr><th>Role</th><th>Status</th><th>Visa</th><th>Updated</th></tr></thead><tbody>{visibleApplications.map((app) => { const job = state.jobs.find((item) => item.id === app.jobId); return <tr key={app.id} className={selected === app.id ? "selected" : ""} onClick={() => setSelected(app.id)}><td><strong>{app.jobTitle}</strong><span>{app.company} · {app.location}</span></td><td><span className={`status-pill ${app.status.toLowerCase().replace(" ", "-")}`}>{app.status}</span></td><td>{job?.visaFit ?? "Unknown"}</td><td>{app.applicationDate ?? "Today"}</td></tr>; })}</tbody></table>{visibleApplications.length === 0 && <div className="table-empty">No applications with this status.</div>}</div>
-        {application && <section className="application-detail panel"><div className="panel-header"><div><span className="eyebrow">Prepared application</span><h2>{application.jobTitle}</h2><p>{application.company} · {application.requisitionId}</p></div><span className="source-badge mock">Simulated</span></div><div className="application-checklist"><CheckItem label="Resume" value={application.resumeVersion} /><CheckItem label="Work authorization" value="Malaysian citizen requiring employer-sponsored Singapore work authorization." /><CheckItem label="Salary answer" value="Expected base salary: SGD 7,500–8,500 per month. Current salary not disclosed." /><CheckItem label="Notice period" value="30 days" /><CheckItem label="Relocation" value="Willing to relocate to Singapore" /></div>{confirmedApps.includes(application.id) || application.status === "Submitted" ? <div className="confirmed-answer"><CheckCircle2 size={17} /><div><strong>Earliest start date confirmed</strong><span>1 September 2026</span></div></div> : <div className="missing-answer"><AlertCircle size={17} /><div><strong>One answer needs confirmation</strong><span>May we share your earliest start date as 1 September 2026?</span></div><button onClick={() => { setConfirmedApps((items) => [...items, application.id]); showToast("Earliest start date confirmed", "success"); }}>Confirm</button></div>}<div className="application-detail-actions"><button className="button primary" disabled={application.status === "Submitted" || !confirmedApps.includes(application.id)} onClick={submit}>{application.status === "Submitted" ? "Simulated submission complete" : "Approve & simulate submission"} <Send size={16} /></button><button className="button ghost" onClick={() => updateStatus(application.id, "Withdrawn")}>Withdraw</button></div><p className="fine-print"><ShieldCheck size={14} /> No captcha, assessment, identity check, or external submission is performed.</p></section>}
+        {application && <section className="application-detail panel">
+          <div className="panel-header"><div><span className="eyebrow">Prepared application</span><h2>{application.jobTitle}</h2><p>{application.company} · {application.requisitionId}</p></div><span className={isExternal ? "source-badge live" : "source-badge mock"}>{isExternal ? "Employer site" : "Simulated"}</span></div>
+          {isExternal ? <>
+            <div className="status-banner warning personal-data-warning"><AlertCircle size={18} /><div><strong>Your personal profile is not connected yet</strong><span>Use your own truthful résumé and answers on the employer form. Grounded will not prefill or send the demonstration profile.</span></div></div>
+            <div className="application-checklist"><CheckItem label="Resume" value="Your real resume is required" verified={false} /><CheckItem label="Work authorization" value="Confirm directly on the employer form" verified={false} /><CheckItem label="Current salary" value="Private — do not disclose unless you choose" /><CheckItem label="Destination" value="Official employer application page" /></div>
+            <div className="external-handoff">
+              <div><span className="eyebrow">Real application handoff</span><h3>Finish securely on the employer’s website</h3><p>Grounded opens the official form. You review every field, handle any assessment or captcha yourself, and press the employer’s final submit button.</p></div>
+              <a className="button primary" href={employerUrl} target="_blank" rel="noreferrer" onClick={() => setOpenedApps((items) => items.includes(application.id) ? items : [...items, application.id])}>Open official application <ExternalLink size={16} /></a>
+              <label className={openedApps.includes(application.id) ? "submission-confirmation" : "submission-confirmation disabled"}><input type="checkbox" disabled={!openedApps.includes(application.id) || application.status === "Submitted"} checked={completedApps.includes(application.id) || application.status === "Submitted"} onChange={(event) => setCompletedApps((items) => event.target.checked ? [...items.filter((id) => id !== application.id), application.id] : items.filter((id) => id !== application.id))} /><span><strong>I completed and sent the employer form</strong><small>Check this only after the employer shows a success or confirmation page.</small></span></label>
+              <button className="button secondary" disabled={application.status === "Submitted" || !completedApps.includes(application.id)} onClick={recordExternalSubmission}>{application.status === "Submitted" ? "Recorded as submitted" : "Record as Submitted"} <CheckCircle2 size={16} /></button>
+            </div>
+            <div className="application-detail-actions"><button className="button ghost" onClick={() => updateStatus(application.id, "Withdrawn")}>Withdraw from tracker</button></div>
+            <p className="fine-print"><ShieldCheck size={14} /> Grounded does not bypass captchas, assessments, identity checks, or employer consent screens.</p>
+          </> : <>
+            <div className="application-checklist"><CheckItem label="Resume" value={application.resumeVersion} /><CheckItem label="Work authorization" value="Malaysian citizen requiring employer-sponsored Singapore work authorization." /><CheckItem label="Salary answer" value="Expected base salary: SGD 7,500–8,500 per month. Current salary not disclosed." /><CheckItem label="Notice period" value="30 days" /><CheckItem label="Relocation" value="Willing to relocate to Singapore" /></div>
+            {confirmedApps.includes(application.id) || application.status === "Submitted" ? <div className="confirmed-answer"><CheckCircle2 size={17} /><div><strong>Earliest start date confirmed</strong><span>1 September 2026</span></div></div> : <div className="missing-answer"><AlertCircle size={17} /><div><strong>One answer needs confirmation</strong><span>May we share your earliest start date as 1 September 2026?</span></div><button onClick={() => { setConfirmedApps((items) => [...items, application.id]); showToast("Earliest start date confirmed", "success"); }}>Confirm</button></div>}
+            <div className="application-detail-actions"><button className="button primary" disabled={application.status === "Submitted" || !confirmedApps.includes(application.id)} onClick={simulateSubmission}>{application.status === "Submitted" ? "Simulated submission complete" : "Approve & simulate submission"} <Send size={16} /></button><button className="button ghost" onClick={() => updateStatus(application.id, "Withdrawn")}>Withdraw</button></div>
+            <p className="fine-print"><ShieldCheck size={14} /> This demonstration does not contact a real employer.</p>
+          </>}
+        </section>}
       </div>}
     </>
   );
 }
 
-function CheckItem({ label, value }: { label: string; value: string }) {
-  return <div><CheckCircle2 size={17} /><p><span>{label}</span><strong>{value}</strong></p><span className="verified-label">Confirmed</span></div>;
+function CheckItem({ label, value, verified = true }: { label: string; value: string; verified?: boolean }) {
+  return <div>{verified ? <CheckCircle2 size={17} /> : <AlertCircle size={17} className="amber-icon" />}<p><span>{label}</span><strong>{value}</strong></p><span className={verified ? "verified-label" : "review-label"}>{verified ? "Confirmed" : "Review"}</span></div>;
 }
 
 function ResumeView({ state, setState, showToast }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; showToast: (message: string, tone?: "success" | "warning" | "neutral") => void }) {
