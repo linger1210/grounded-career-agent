@@ -1,0 +1,9 @@
+Aisha Rahman
+Senior Data Analyst
+
+Professional Experience
+Meridian Commerce — Senior Data Analyst, 2021–Present
+Automated SQL and Power BI reporting across product, operations, and finance, reducing weekly reporting time by 18 hours.
+
+Skills
+SQL, Python, Power BI, experimentation, product metrics
