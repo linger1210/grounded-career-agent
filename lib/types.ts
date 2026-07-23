@@ -344,6 +344,14 @@ export interface ScheduledRun {
   dailyLimit: number;
   lowChanceLimit: number;
   lastRunAt?: string;
+  lastReport?: {
+    discovered: number;
+    matched: number;
+    prepared: number;
+    submitted: number;
+    blockers: string[];
+    warnings: string[];
+  };
   retryRule: string;
 }
 

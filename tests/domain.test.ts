@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { autoPrepareApplications, getAutoPreparationReadiness } from "../lib/automation";
 import { initialAppState } from "../lib/demo";
 import {
   assessCareerLevel,
@@ -145,6 +146,56 @@ test("scheduled runs stop while paused and produce a short report when active", 
   const result = runScheduledSearch({ enabled: true, paused: false, found: 42, matched: 11, prepared: 6, submitted: 3 });
   assert.equal(result.ran, true);
   assert.match(result.report ?? "", /42 jobs found/);
+});
+
+test("automatic preparation queues live jobs but never submits employer forms", () => {
+  const state = structuredClone(initialAppState);
+  const liveJob = {
+    ...state.jobs[0],
+    id: "job-live-safe",
+    sourceId: "official-live",
+    sourceLabel: "Official employer site",
+    sourceKind: "public-career-page" as const,
+    canonicalUrl: "https://careers.example.com/jobs/123",
+    applicationSupport: "external" as const,
+  };
+  state.resumeContent = { ...state.resumeContent!, personalized: true };
+  state.schedule.paused = false;
+  state.jobs = [liveJob];
+  state.matches = [{ ...state.matches[0], id: "match-live-safe", jobId: liveJob.id, decision: "Apply" }];
+  state.applications = [];
+  assert.equal(getAutoPreparationReadiness(state).ready, true);
+  const first = autoPrepareApplications(state, "2026-07-23T08:30:00+08:00");
+  assert.equal(first.report.prepared, 1);
+  assert.equal(first.report.submitted, 0);
+  assert.equal(first.state.applications[0].status, "Needs Review");
+  assert.equal(first.state.applications[0].submittedByUser, false);
+  const duplicateRun = autoPrepareApplications(first.state, "2026-07-24T08:30:00+08:00");
+  assert.equal(duplicateRun.report.prepared, 0);
+});
+
+test("automatic preparation blocks demo-only, paused, and hard-visa-blocked work", () => {
+  const demoReadiness = getAutoPreparationReadiness(initialAppState);
+  assert.equal(demoReadiness.ready, false);
+  assert.ok(demoReadiness.blockers.includes("Connect a personal resume"));
+  assert.ok(demoReadiness.blockers.includes("Connect at least one live employer job"));
+
+  const state = structuredClone(initialAppState);
+  const blockedJob = {
+    ...state.jobs[0],
+    id: "job-live-blocked",
+    sourceKind: "public-career-page" as const,
+    canonicalUrl: "https://careers.example.com/jobs/blocked",
+    applicationSupport: "external" as const,
+    visaFit: "Sponsorship clearly unavailable" as const,
+  };
+  state.resumeContent = { ...state.resumeContent!, personalized: true };
+  state.schedule.paused = false;
+  state.jobs = [blockedJob];
+  state.matches = [{ ...state.matches[0], jobId: blockedJob.id, decision: "Apply" }];
+  state.applications = [];
+  const result = autoPrepareApplications(state);
+  assert.equal(result.report.prepared, 0);
 });
 
 test("user consent remains separate and anonymous analytics starts disabled", () => {

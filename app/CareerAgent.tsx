@@ -44,6 +44,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getAutoPreparationReadiness } from "../lib/automation";
 import { initialAppState } from "../lib/demo";
 import { deduplicateJobs, isSafeEmployerUrl, parsePreferenceSentence } from "../lib/domain";
 import type {
@@ -532,23 +533,47 @@ function PageHeading({ eyebrow, title, detail, action }: { eyebrow?: string; tit
 }
 
 function HomeView({ state, setState, setView, showToast }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; setView: (view: View) => void; showToast: (message: string, tone?: "success" | "warning" | "neutral") => void }) {
-  const topJob = state.jobs[0];
+  const [running, setRunning] = useState(false);
+  const topJob = state.jobs.find((job) => job.sourceKind !== "mock") ?? state.jobs[0];
   const topMatch = state.matches.find((match) => match.jobId === topJob.id)!;
   const conflictOpen = state.evidence.some((item) => item.confirmationStatus === "conflict");
   const primaryAssessment = state.careerAssessments[0];
   const salaryAssessment = state.salaryAssessments[0];
   const confirmedEvidence = state.evidence.filter((item) => item.confirmationStatus === "confirmed").length;
+  const readiness = getAutoPreparationReadiness(state);
+  const lastReport = state.schedule.lastReport;
   const today = new Intl.DateTimeFormat("en-MY", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
-  const runSearch = () => {
-    if (state.schedule.paused) return showToast("Resume automation before running a search", "warning");
-    setState((current) => ({ ...current, schedule: { ...current.schedule, lastRunAt: new Date().toISOString() } }));
-    showToast("Daily run complete: 42 found, 11 matched, 6 prepared, 3 simulated submissions", "success");
+  const lastRunLabel = state.schedule.lastRunAt
+    ? new Intl.DateTimeFormat("en-MY", { weekday: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(state.schedule.lastRunAt))
+    : "Not run yet";
+  const runSearch = async () => {
+    setRunning(true);
+    try {
+      const response = await fetch("/api/automation", { method: "POST" });
+      const payload = await response.json() as { state?: AppState; report?: AppState["schedule"]["lastReport"]; error?: string };
+      if (!response.ok || !payload.state || !payload.report) throw new Error(payload.error ?? "Automatic preparation could not run");
+      setState(payload.state);
+      if (payload.report.blockers.length) showToast(payload.report.blockers[0], "warning");
+      else showToast(`${payload.report.prepared} real ${payload.report.prepared === 1 ? "application" : "applications"} prepared for review`, "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Automatic preparation could not run", "warning");
+    } finally {
+      setRunning(false);
+    }
   };
   return (
     <>
-      <PageHeading eyebrow={today} title={`Good morning, ${state.user.displayName.split(" ")[0]}.`} detail="Here is the honest picture of your search today." action={<button className="button secondary" onClick={runSearch}><RefreshCw size={16} /> Run search now</button>} />
-      {state.schedule.paused && <div className="status-banner warning"><Pause size={18} /><div><strong>All automation is paused</strong><span>No jobs will be prepared or submitted until you resume.</span></div><button onClick={() => setState((current) => ({ ...current, schedule: { ...current.schedule, paused: false } }))}>Resume</button></div>}
+      <PageHeading eyebrow={today} title={`Good morning, ${state.user.displayName.split(" ")[0]}.`} detail="Here is the honest picture of your search today." action={<button className="button secondary" disabled={running} onClick={runSearch}>{running ? <RefreshCw className="spin" size={16} /> : <Sparkles size={16} />} {running ? "Preparing…" : "Auto-prepare now"}</button>} />
+      {state.schedule.paused && <div className="status-banner warning"><Pause size={18} /><div><strong>Automatic preparation is paused</strong><span>No real jobs will be prepared until you resume. Final employer submission always remains yours.</span></div><button onClick={() => setState((current) => ({ ...current, schedule: { ...current.schedule, paused: false } }))}>Resume</button></div>}
       {conflictOpen && <div className="status-banner conflict"><AlertCircle size={19} /><div><strong>One fact needs your answer</strong><span>Two sources disagree about when your current role started.</span></div><button onClick={() => setView("profile")}>Resolve conflict <ChevronRight size={15} /></button></div>}
+      <section className="panel autopilot-panel">
+        <div className="autopilot-heading"><div className="autopilot-icon"><Sparkles size={20} /></div><div><span className="eyebrow">Application autopilot</span><h2>Discover and prepare automatically</h2><p>Grounded can queue real employer applications and tailor private materials. It never uploads your résumé or presses an employer’s final Submit button.</p></div><span className={readiness.ready ? "source-badge live" : "source-badge demo"}>{readiness.ready ? "Ready" : `${readiness.blockers.length} setup ${readiness.blockers.length === 1 ? "item" : "items"}`}</span></div>
+        <div className="autopilot-status">
+          {(readiness.blockers.length ? readiness.blockers : ["Automatic preparation is ready"]).map((item) => <span key={item} className={readiness.ready ? "ready" : "blocked"}>{readiness.ready ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}{item}</span>)}
+          {readiness.warnings.slice(0, 3).map((item) => <span key={item} className="warning"><Info size={15} />{item}</span>)}
+        </div>
+        <div className="panel-actions"><button className="button primary small" onClick={() => setView("jobs")}>Connect real jobs <Link2 size={15} /></button><button className="button ghost small" onClick={() => setView("profile")}>Confirm application facts</button></div>
+      </section>
       <div className="metric-grid">
         <MetricCard label="Profile evidence" value={`${state.careerProfile.completeness}%`} detail={`${confirmedEvidence} of ${state.evidence.length} facts confirmed`} icon={FileCheck2} accent="blue" />
         <MetricCard label="Best target level" value={primaryAssessment?.recommendedLevel ?? "Not assessed"} detail={primaryAssessment ? `${primaryAssessment.targetRole} · ${primaryAssessment.confidence} confidence` : "Connect your resume to assess"} icon={Gauge} accent="green" />
@@ -557,15 +582,15 @@ function HomeView({ state, setState, setView, showToast }: { state: AppState; se
       </div>
       <div className="dashboard-grid">
         <section className="panel top-opportunity">
-          <div className="panel-header"><div><span className="eyebrow">Best opportunity today</span><h2>{topJob.title}</h2><p>{topJob.company} · {topJob.location} · {topJob.remotePolicy}</p></div><span className="source-badge mock">Demo source</span></div>
-          <div className="job-fit-summary"><div><span>Decision</span><strong className="apply-text">{topMatch.decision}</strong></div><div><span>Interview chance</span><strong className="medium-text">{topMatch.interviewChance}</strong></div><div><span>Seniority</span><strong>Good fit</strong></div><div><span>Salary</span><strong>SGD {topJob.salaryLow?.toLocaleString()}–{topJob.salaryHigh?.toLocaleString()}</strong></div></div>
-          <p className="reason-line"><Sparkles size={16} /> Strong SQL and experimentation evidence. Your main gap is direct fintech experience.</p>
+          <div className="panel-header"><div><span className="eyebrow">Best opportunity today</span><h2>{topJob.title}</h2><p>{topJob.company} · {topJob.location} · {topJob.remotePolicy}</p></div><span className={topJob.sourceKind === "mock" ? "source-badge mock" : "source-badge live"}>{topJob.sourceKind === "mock" ? "Demo source" : "Official source"}</span></div>
+          <div className="job-fit-summary"><div><span>Decision</span><strong className="apply-text">{topMatch.decision}</strong></div><div><span>Interview chance</span><strong className="medium-text">{topMatch.interviewChance}</strong></div><div><span>Seniority</span><strong>{topMatch.seniorityFit}</strong></div><div><span>Salary</span><strong>{topJob.salaryLow ? `${topJob.salaryCurrency ?? ""} ${topJob.salaryLow.toLocaleString()}–${topJob.salaryHigh?.toLocaleString()}` : "Not listed"}</strong></div></div>
+          <p className="reason-line"><Sparkles size={16} /> {topMatch.reasons[0]}</p>
           <div className="panel-actions"><button className="button primary small" onClick={() => setView("jobs")}>Review match</button><button className="button ghost small" onClick={() => addFeedback(state, setState, "job", topJob.id, "Relevant", showToast)}>Relevant <ThumbsUp size={15} /></button></div>
         </section>
         <section className="panel daily-report">
-          <div className="panel-header"><div><span className="eyebrow">Last daily run</span><h2>Tuesday at 08:30</h2></div><CalendarClock size={22} /></div>
-          <div className="report-stats"><span><strong>42</strong> jobs found</span><span><strong>11</strong> matched</span><span><strong>6</strong> prepared</span><span><strong>3</strong> simulated</span></div>
-          <p><Info size={15} /> 2 applications need one confirmed answer.</p>
+          <div className="panel-header"><div><span className="eyebrow">Last automatic run</span><h2>{lastRunLabel}</h2></div><CalendarClock size={22} /></div>
+          <div className="report-stats"><span><strong>{lastReport?.discovered ?? 0}</strong> live jobs</span><span><strong>{lastReport?.matched ?? 0}</strong> eligible</span><span><strong>{lastReport?.prepared ?? 0}</strong> prepared</span><span><strong>{lastReport?.submitted ?? 0}</strong> submitted</span></div>
+          <p><Info size={15} /> {lastReport?.blockers[0] ?? lastReport?.warnings[0] ?? "No employer form is submitted without your final approval."}</p>
           <button className="text-button" onClick={() => setView("applications")}>Open application tracker <ArrowRight size={15} /></button>
         </section>
       </div>
@@ -597,16 +622,16 @@ function provisionalMatch(job: JobPosting, state: AppState): JobMatch {
     jobId: job.id,
     decision: hardVisaBlock ? "Skip" : "Apply",
     interviewChance: hardVisaBlock ? "Low" : roleOverlap ? "Medium" : "Low",
-    resumeVersion: "Personal resume required",
+    resumeVersion: state.resumeContent?.personalized ? state.resume.name : "Personal resume required",
     seniorityFit: "Needs resume review",
     salaryFit: job.salaryLow ? "Listed by employer" : "Not listed",
     visaFit: job.visaFit,
-    gaps: ["Upload your real resume for a personalized assessment"],
+    gaps: state.resumeContent?.personalized ? ["Confirm résumé evidence before employer use"] : ["Upload your real resume for a personalized assessment"],
     evidenceQuality: "Low",
     reasons: [
       "This job comes from an official employer page.",
       hardVisaBlock ? "The posting contains a confirmed work-authorization blocker." : "No confirmed hard blocker was found in the imported posting.",
-      "Fit remains provisional until your real resume is analyzed.",
+      state.resumeContent?.personalized ? "Fit remains provisional until your résumé evidence is confirmed." : "Fit remains provisional until your real resume is analyzed.",
     ],
   };
 }
@@ -785,7 +810,7 @@ function ApplicationsView({ state, setState, showToast }: { state: AppState; set
   const employerUrl = application && isSafeEmployerUrl(application.jobUrl ?? applicationJob?.canonicalUrl ?? "") ? application.jobUrl ?? applicationJob?.canonicalUrl : undefined;
   const isExternal = Boolean(application && !application.simulated && employerUrl);
   const resumeReady = Boolean(state.resumeContent?.personalized);
-  const confirmedEvidenceCount = state.evidence.filter((item) => item.confirmationStatus === "confirmed").length;
+  const confirmedEmployerEvidenceCount = state.evidence.filter((item) => item.confirmationStatus === "confirmed" && item.employerUse).length;
   const authorizationKnown = Boolean(state.workAuthorization.existingAuthorization && !/not confirmed/i.test(state.workAuthorization.existingAuthorization));
   const authorizationAnswer = authorizationKnown ? state.workAuthorization.existingAuthorization! : "Not confirmed - answer directly on the employer form";
   const visibleApplications = filter === "All" ? state.applications : state.applications.filter((item) => item.status === filter);
@@ -825,8 +850,8 @@ function ApplicationsView({ state, setState, showToast }: { state: AppState; set
         {application && <section className="application-detail panel">
           <div className="panel-header"><div><span className="eyebrow">Prepared application</span><h2>{application.jobTitle}</h2><p>{application.company} · {application.requisitionId}</p></div><span className={isExternal ? "source-badge live" : "source-badge mock"}>{isExternal ? "Employer site" : "Simulated"}</span></div>
           {isExternal ? <>
-            {!resumeReady ? <div className="status-banner warning personal-data-warning"><AlertCircle size={18} /><div><strong>Your personal profile is not connected yet</strong><span>Use your own truthful résumé and answers on the employer form. Grounded will not prefill or send the demonstration profile.</span></div></div> : confirmedEvidenceCount === 0 ? <div className="status-banner warning personal-data-warning"><AlertCircle size={18} /><div><strong>Your résumé is imported, but its evidence still needs confirmation</strong><span>Review the evidence ledger before relying on any prepared wording or employer answer.</span></div></div> : <div className="status-banner neutral personal-data-warning"><ShieldCheck size={18} /><div><strong>Your personal résumé is connected</strong><span>Review every employer field before submission. Grounded never presses the final submit button.</span></div></div>}
-            <div className="application-checklist"><CheckItem label="Resume" value={state.resumeContent?.sourceFile ?? "Your real resume is required"} verified={resumeReady && confirmedEvidenceCount > 0} /><CheckItem label="Work authorization" value={authorizationAnswer} verified={authorizationKnown} /><CheckItem label="Current salary" value={state.salaryProfile.amount > 0 ? `Private ${state.salaryProfile.currency} ${state.salaryProfile.amount.toLocaleString()} / ${state.salaryProfile.period}` : "Not provided - private by default"} verified={state.salaryProfile.amount > 0} /><CheckItem label="Destination" value="Official employer application page" /></div>
+            {!resumeReady ? <div className="status-banner warning personal-data-warning"><AlertCircle size={18} /><div><strong>Your personal profile is not connected yet</strong><span>Use your own truthful résumé and answers on the employer form. Grounded will not prefill or send the demonstration profile.</span></div></div> : confirmedEmployerEvidenceCount === 0 ? <div className="status-banner warning personal-data-warning"><AlertCircle size={18} /><div><strong>No résumé evidence is approved for employer use</strong><span>Confirm the relevant evidence and enable Employer permission before relying on prepared wording.</span></div></div> : <div className="status-banner neutral personal-data-warning"><ShieldCheck size={18} /><div><strong>Your personal résumé is connected</strong><span>Review every employer field before submission. Grounded never presses the final submit button.</span></div></div>}
+            <div className="application-checklist"><CheckItem label="Resume" value={state.resumeContent?.sourceFile ?? "Your real resume is required"} verified={resumeReady && confirmedEmployerEvidenceCount > 0} /><CheckItem label="Work authorization" value={authorizationAnswer} verified={authorizationKnown} /><CheckItem label="Current salary" value={state.salaryProfile.amount > 0 ? `Private ${state.salaryProfile.currency} ${state.salaryProfile.amount.toLocaleString()} / ${state.salaryProfile.period}` : "Not provided - private by default"} verified={state.salaryProfile.amount > 0} /><CheckItem label="Destination" value="Official employer application page" /></div>
             <div className="external-handoff">
               <div><span className="eyebrow">Real application handoff</span><h3>Finish securely on the employer’s website</h3><p>Grounded opens the official form. You review every field, handle any assessment or captcha yourself, and press the employer’s final submit button.</p></div>
               <a className="button primary" href={employerUrl} target="_blank" rel="noreferrer" onClick={() => setOpenedApps((items) => items.includes(application.id) ? items : [...items, application.id])}>Open official application <ExternalLink size={16} /></a>
@@ -948,6 +973,36 @@ function ResumePaper({ profile, label }: { profile: ResumeContent; label: string
   return <article className="resume-paper"><div className="paper-label"><span>{label}</span><em>{profile.sourceFile}</em></div><div className="resume-name">{profile.name}</div><div className="resume-role">{profile.professionalTitle}</div><div className="resume-contact">{contact}</div><section><h3>Profile</h3><p>{profile.summary}</p></section><section><h3>Core Capabilities</h3>{profile.capabilityGroups.map((group) => <p key={group.label}><strong>{group.label}:</strong> {group.items.join(" · ")}</p>)}</section><section><h3>Professional Experience</h3>{profile.experiences.map((experience) => <div key={`${experience.company}-${experience.title}`}><h4>{experience.title} · {experience.company} <span>{experience.startDate}–{experience.endDate}</span></h4>{experience.context && <p>{experience.context}</p>}<ul>{experience.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul></div>)}</section>{profile.projects.length > 0 && <section><h3>Selected Projects</h3><ul>{profile.projects.map((project) => <li key={project}>{project}</li>)}</ul></section>}{profile.earlierExperience.length > 0 && <section><h3>Earlier Experience</h3>{profile.earlierExperience.map((item) => <p key={item}>{item}</p>)}</section>}<section><h3>Education & Certifications</h3>{profile.education.map((item) => <p key={item}>{item}</p>)}{profile.certifications.length > 0 && <p><strong>Certifications:</strong> {profile.certifications.join(" · ")}</p>}</section>{profile.awards.length > 0 && <section><h3>Awards</h3><p>{profile.awards.join(" · ")}</p></section>}{profile.languages.length > 0 && <section><h3>Languages</h3><p>{profile.languages.join(" · ")}</p></section>}</article>;
 }
 
+function ApplicationFactsCard({ state, setState, showToast }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; showToast: (message: string, tone?: "success" | "warning" | "neutral") => void }) {
+  const source = state.resumeContent?.sourceFile;
+  const unconfirmedResumeFacts = state.evidence.filter((item) => item.source === source && item.confirmationStatus !== "confirmed").length;
+  const confirmResumeFacts = () => {
+    if (!source || !window.confirm(`Confirm that the facts extracted from ${source} are current and accurate? Employer-use permission will remain off.`)) return;
+    setState((current) => ({
+      ...current,
+      evidence: current.evidence.map((item) => item.source === source
+        ? { ...item, confirmationStatus: "confirmed", classification: "Confirmed fact", resumeUse: true }
+        : item),
+    }));
+    showToast("Resume facts confirmed. Employer permission remains under your control.", "success");
+  };
+  return (
+    <section className="panel application-facts">
+      <div className="panel-header">
+        <div><span className="eyebrow">Required application facts</span><h2>Complete once, review before every employer</h2><p>Grounded uses these private answers to prepare forms. It never sends them without your final review.</p></div>
+        {unconfirmedResumeFacts > 0 && <button className="button secondary small" onClick={confirmResumeFacts}><BadgeCheck size={16} /> Confirm {unconfirmedResumeFacts} résumé facts</button>}
+      </div>
+      <div className="application-facts-grid">
+        <label>Current work authorization<input value={state.workAuthorization.existingAuthorization ?? ""} onChange={(event) => setState((current) => ({ ...current, workAuthorization: { ...current.workAuthorization, existingAuthorization: event.target.value || undefined } }))} placeholder="Example: Authorized to work in Malaysia" /></label>
+        <label>Sponsorship needed<select value={state.workAuthorization.requiresSponsorship === null ? "unknown" : state.workAuthorization.requiresSponsorship ? "yes" : "no"} onChange={(event) => setState((current) => ({ ...current, preferences: { ...current.preferences, requiresSponsorship: event.target.value === "unknown" ? null : event.target.value === "yes" }, workAuthorization: { ...current.workAuthorization, requiresSponsorship: event.target.value === "unknown" ? null : event.target.value === "yes" } }))}><option value="unknown">Not confirmed</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+        <label>Notice period<input value={state.workAuthorization.noticePeriod ?? ""} onChange={(event) => setState((current) => ({ ...current, workAuthorization: { ...current.workAuthorization, noticePeriod: event.target.value || undefined } }))} placeholder="Example: 30 days" /></label>
+        <label>Current salary <small>Optional and private</small><div className="fact-input-cluster"><select aria-label="Salary currency" value={state.salaryProfile.currency} onChange={(event) => setState((current) => ({ ...current, salaryProfile: { ...current.salaryProfile, currency: event.target.value } }))}><option>MYR</option><option>SGD</option><option>USD</option><option>GBP</option></select><input aria-label="Current salary amount" type="number" min="0" value={state.salaryProfile.amount || ""} onChange={(event) => setState((current) => ({ ...current, salaryProfile: { ...current.salaryProfile, amount: Number(event.target.value) } }))} placeholder="Leave blank" /></div></label>
+      </div>
+      <label className="consent-row compact"><input type="checkbox" checked={state.workAuthorization.willingToRelocate} onChange={(event) => setState((current) => ({ ...current, workAuthorization: { ...current.workAuthorization, willingToRelocate: event.target.checked } }))} /><span><strong>I am willing to relocate to my target country</strong><small>This records your preference; it does not claim visa approval.</small></span></label>
+    </section>
+  );
+}
+
 function ProfileView({ state, setState, showToast }: { state: AppState; setState: React.Dispatch<React.SetStateAction<AppState>>; showToast: (message: string, tone?: "success" | "warning" | "neutral") => void }) {
   const [tab, setTab] = useState<"evidence" | "privacy" | "ai">("evidence");
   const [key, setKey] = useState("");
@@ -993,6 +1048,7 @@ function ProfileView({ state, setState, showToast }: { state: AppState; setState
       <PageHeading eyebrow="Evidence & privacy" title="Your career profile" detail="Inspect every fact, source, permission, and unresolved conflict." action={<button className="button secondary" onClick={exportData}><Download size={16} /> Export my data</button>} />
       <div className="profile-summary panel"><div className="profile-avatar">{initials(state.user.displayName)}</div><div><h2>{state.user.displayName}</h2><p>{state.careerProfile.headline}</p><div className="profile-chips">{state.personalData.currentCountry && <span>{state.personalData.currentCountry}</span>}{state.personalData.yearsExperience !== undefined && <span>{state.personalData.yearsExperience}+ years experience</span>}<span>{targetCountries} target</span></div></div><div className="profile-completeness"><strong>{state.careerProfile.completeness}%</strong><span>Evidence complete</span></div></div>
       <div className="profile-tabs"><button className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")}>Evidence</button><button className={tab === "privacy" ? "active" : ""} onClick={() => setTab("privacy")}>Privacy & consent</button><button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI provider</button></div>
+      {tab === "evidence" && <ApplicationFactsCard state={state} setState={setState} showToast={showToast} />}
       {tab === "evidence" && <div className="profile-content"><div className="profile-main">{conflicts.length > 0 && <section className="panel"><div className="panel-header"><div><span className="eyebrow">Conflict requiring confirmation</span><h2>We found different versions of the same fact.</h2></div><AlertCircle className="amber-icon" size={22} /></div><div className="conflict-options">{conflicts.map((item) => <button key={item.id} onClick={() => resolveConflict(item.id)}><span className="conflict-year">{item.claim.match(/20\d{2}/)?.[0] ?? "?"}</span><div><strong>{item.source}</strong><span>{item.reference}</span></div><ChevronRight size={17} /></button>)}</div></section>}<section className="panel evidence-section"><div className="panel-header"><div><span className="eyebrow">Evidence ledger</span><h2>{state.evidence.length} extracted facts</h2></div><span className="source-badge evidence">{state.evidence.filter((item) => item.confirmationStatus === "confirmed").length} confirmed</span></div><div className="evidence-table">{state.evidence.map((item) => <article key={item.id}><div className="evidence-main"><span className={`classification ${item.classification.toLowerCase().replaceAll(" ", "-")}`}>{item.classification}</span><strong>{item.claim}</strong><p><FileText size={13} /> {item.source} · {item.reference}</p></div><div className="evidence-permissions"><span className={`confidence ${item.confidence.toLowerCase()}`}>{item.confidence}</span>{item.confirmationStatus !== "confirmed" && <button className="evidence-confirm" onClick={() => confirmEvidence(item.id)}>Confirm</button>}<label title="May use in resume"><input type="checkbox" checked={item.resumeUse} onChange={(event) => setState((current) => ({ ...current, evidence: current.evidence.map((entry) => entry.id === item.id ? { ...entry, resumeUse: event.target.checked } : entry) }))} /> Resume</label><label title={item.confirmationStatus === "confirmed" ? "May submit to an employer" : "Confirm this fact before employer use"}><input type="checkbox" disabled={item.confirmationStatus !== "confirmed"} checked={item.employerUse} onChange={(event) => setState((current) => ({ ...current, evidence: current.evidence.map((entry) => entry.id === item.id ? { ...entry, employerUse: event.target.checked } : entry) }))} /> Employer</label></div></article>)}</div></section></div><aside className="profile-aside"><section className="panel"><span className="eyebrow">Work authorization</span><h3>{targetCountries}</h3><p>{workAuthorizationKnown ? state.workAuthorization.existingAuthorization : "Nationality and work authorization are not confirmed in the imported resume."}</p><div className="fact-row"><span>Sponsorship</span><strong>{sponsorshipLabel}</strong></div><div className="fact-row"><span>Relocation</span><strong>{state.workAuthorization.willingToRelocate ? state.resumeContent?.relocation ?? "Yes" : "Not confirmed"}</strong></div><div className="fact-row"><span>Notice</span><strong>{state.workAuthorization.noticePeriod ?? "Not confirmed"}</strong></div><p className="fine-print">No visa approval or work authorization is inferred from your résumé.</p></section><section className="panel"><span className="eyebrow">Salary privacy</span><h3>{salaryLabel}</h3><p>Current salary is private and will not be sent to employers without confirmation.</p><span className="privacy-pill"><LockKeyhole size={14} /> Private</span></section></aside></div>}
       {tab === "privacy" && <div className="privacy-settings"><section className="panel"><div className="panel-header"><div><span className="eyebrow">Consent controls</span><h2>Separate choices, always reversible</h2></div><ShieldCheck size={22} /></div>{state.consents.map((consent) => <label className="setting-row" key={consent.id}><div><strong>{consent.type === "personal-analytics" ? "Personal career analytics" : consent.type === "anonymous-product-analytics" ? "Anonymous product analytics" : "Document analysis"}</strong><span>{consent.type === "anonymous-product-analytics" ? "Help improve the product with anonymized usage. Off by default." : consent.type === "document-analysis" ? "Analyze only files you explicitly authorize." : "Use your outcomes to improve recommendations for you."}</span></div><input type="checkbox" checked={consent.granted} onChange={(event) => setState((current) => ({ ...current, consents: current.consents.map((item) => item.id === consent.id ? { ...item, granted: event.target.checked, recordedAt: new Date().toISOString() } : item) }))} /></label>)}</section><section className="panel danger-zone"><span className="eyebrow">Data controls</span><h2>Export, correct, or delete</h2><div className="data-actions"><button onClick={exportData}><Download size={17} /><span><strong>Export all data</strong><small>Download profile, evidence, applications, and audit history.</small></span><ChevronRight size={17} /></button><button onClick={deleteConversations}><Trash2 size={17} /><span><strong>Delete imported conversations</strong><small>Remove conversation indexes and extracted private claims. Originals stay untouched.</small></span><ChevronRight size={17} /></button><button className="danger" onClick={deleteAccountData}><Trash2 size={17} /><span><strong>Delete account data</strong><small>Permanent after this final confirmation step.</small></span><ChevronRight size={17} /></button></div></section></div>}
       {tab === "ai" && <div className="ai-settings"><section className="panel"><div className="panel-header"><div><span className="eyebrow">Bring Your Own AI</span><h2>Use your supported API account</h2></div><KeyRound size={22} /></div><div className="provider-options"><label className="provider-option active"><input type="radio" defaultChecked name="provider" /><span><strong>Limited platform-provided AI</strong><small>Available in this demonstration. Structured, evidence-linked outputs.</small></span><em>Selected</em></label><label className="provider-option"><input type="radio" name="provider" /><span><strong>Your supported API account</strong><small>Requires secure server-side credential storage. A consumer chat subscription does not include API usage.</small></span></label><label className="provider-option disabled"><input type="radio" disabled name="provider" /><span><strong>Local model</strong><small>Planned. Not available in this MVP.</small></span><em>Future</em></label></div><div className="key-form"><label>API credential<input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder="Stored encrypted; never shown again" /></label><label>Monthly spending limit<div className="input-cluster"><span>US$</span><input type="number" defaultValue="10" min="1" /></div></label><button className="button secondary" disabled={key.length < 8} onClick={saveKey}><LockKeyhole size={16} /> Encrypt & save</button>{providerStatus && <p className="provider-status">{providerStatus}</p>}</div><div className="safety-summary"><ShieldCheck size={19} /><p>Credentials are encrypted server-side, never placed in client code, never logged, and can be deleted immediately. Configure <code>CREDENTIAL_ENCRYPTION_KEY</code> before enabling this option.</p></div></section></div>}
