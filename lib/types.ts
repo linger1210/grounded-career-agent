@@ -65,7 +65,7 @@ export interface CareerPreference {
   countries: string[];
   targetRoles: string[];
   openToCareerChange: boolean;
-  requiresSponsorship: boolean;
+  requiresSponsorship: boolean | null;
   workModes: Array<"Remote" | "Hybrid" | "On-site">;
   applicationMode: ApplicationMode;
   salaryPriority: "Get Hired Faster" | "Balanced" | "Maximize Salary";
@@ -98,7 +98,7 @@ export interface WorkAuthorization {
   nationality?: string;
   currentCountry?: string;
   existingAuthorization?: string;
-  requiresSponsorship: boolean;
+  requiresSponsorship: boolean | null;
   acceptableVisaTypes: string[];
   willingToRelocate: boolean;
   noticePeriod?: string;
@@ -241,6 +241,37 @@ export interface Resume {
   currentVersionId: string;
 }
 
+export interface ResumeExperience {
+  company: string;
+  context?: string;
+  title: string;
+  startDate: string;
+  endDate: string;
+  location?: string;
+  bullets: string[];
+}
+
+export interface ResumeContent {
+  personalized: boolean;
+  sourceFile: string;
+  name: string;
+  professionalTitle: string;
+  location: string;
+  relocation?: string;
+  phone?: string;
+  email?: string;
+  linkedIn?: string;
+  summary: string;
+  capabilityGroups: Array<{ label: string; items: string[] }>;
+  experiences: ResumeExperience[];
+  projects: string[];
+  earlierExperience: string[];
+  education: string[];
+  certifications: string[];
+  awards: string[];
+  languages: string[];
+}
+
 export interface ResumeVersion {
   id: string;
   resumeId: string;
@@ -380,6 +411,7 @@ export interface AppState {
   matches: JobMatch[];
   applications: Application[];
   resume: Resume;
+  resumeContent?: ResumeContent;
   resumeVersions: ResumeVersion[];
   resumeChanges: ResumeChange[];
   defenseCards: InterviewDefenseCard[];

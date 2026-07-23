@@ -243,6 +243,28 @@ const matches: JobMatch[] = [
   },
 ];
 
+const demoResumeContent = {
+  personalized: false,
+  sourceFile: "Aisha_Rahman_Resume.pdf",
+  name: "Aisha Rahman",
+  professionalTitle: "Senior Data Analyst",
+  location: "Kuala Lumpur, Malaysia",
+  relocation: "Open to Singapore relocation",
+  email: "aisha@example.com",
+  summary: "Experienced data analyst with six years of experience in SQL, product metrics, automated reporting, and cross-functional analytics delivery.",
+  capabilityGroups: [{ label: "Skills", items: ["SQL", "Python", "Power BI", "Experimentation", "Product metrics", "Stakeholder management"] }],
+  experiences: [
+    { company: "Meridian Commerce", title: "Senior Data Analyst", startDate: "2021", endDate: "Present", bullets: ["Built dashboards and automated reports for business teams.", "Worked with stakeholders on analytics requests.", "Mentored two analysts on query quality and stakeholder communication."] },
+    { company: "Meridian Commerce", title: "Data Analyst", startDate: "2018", endDate: "2021", bullets: ["Created recurring performance reporting and investigated operational trends using SQL and Excel."] },
+  ],
+  projects: ["Experiment measurement framework - Defined product success metrics and reusable SQL analysis templates."],
+  earlierExperience: [],
+  education: ["BSc Business Analytics - University of Malaya"],
+  certifications: [],
+  awards: [],
+  languages: [],
+} satisfies NonNullable<AppState["resumeContent"]>;
+
 export const initialAppState: AppState = {
   user: { id: "demo-user", email: "aisha@example.com", displayName: "Aisha Rahman", locale: "en", createdAt: "2026-07-01" },
   onboardingComplete: false,
@@ -286,6 +308,7 @@ export const initialAppState: AppState = {
     { id: "app-2", jobId: "job-kinetic", company: "Kinetic Health", jobTitle: "Analytics Lead", location: "Singapore", source: "Grounded demo jobs", requisitionId: "KH-883", resumeVersion: "Singapore · Analytics Leadership", status: "Recommended", simulated: true },
   ],
   resume: { id: "resume-1", userId: "demo-user", name: "Aisha Rahman · Master Resume", kind: "master", currentVersionId: "resume-v2" },
+  resumeContent: demoResumeContent,
   resumeVersions: [
     { id: "resume-v1", resumeId: "resume-1", label: "Original · General Analytics", createdAt: "2026-07-22", evidenceIds: ["ev-impact", "ev-leadership", "ev-skills"] },
     { id: "resume-v2", resumeId: "resume-1", label: "Singapore · Product Analytics", targetCountry: "Singapore", targetRole: "Senior Product Analyst", targetJobId: "job-northstar", createdAt: "2026-07-22", evidenceIds: ["ev-impact", "ev-leadership", "ev-skills"] },
