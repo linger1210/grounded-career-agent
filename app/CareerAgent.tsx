@@ -683,7 +683,7 @@ function JobsView({ state, setState, showToast }: { state: AppState; setState: R
       title: role,
       location: jobLocation.trim() || "Location not specified",
       country: jobLocation.trim() || "Not specified",
-      remotePolicy: /remote/i.test(jobLocation) ? "Remote" : /hybrid/i.test(jobLocation) ? "Hybrid" : "On-site",
+      remotePolicy: /remote/i.test(jobLocation) ? "Remote" : /hybrid/i.test(jobLocation) ? "Hybrid" : /on[- ]?site|office/i.test(jobLocation) ? "On-site" : "Not stated",
       visaFit: "Sponsorship not mentioned",
       seniority: /lead/i.test(role) ? "Lead" : /manager/i.test(role) ? "Manager" : /senior|staff|principal/i.test(role) ? "Senior" : "Mid-level",
       skills: [],

@@ -201,7 +201,7 @@ export interface JobPosting {
   title: string;
   location: string;
   country: string;
-  remotePolicy: "Remote" | "Hybrid" | "On-site";
+  remotePolicy: "Remote" | "Hybrid" | "On-site" | "Not stated";
   salaryLow?: number;
   salaryHigh?: number;
   salaryCurrency?: string;
@@ -213,7 +213,7 @@ export interface JobPosting {
   requisitionId: string;
   canonicalUrl: string;
   description: string;
-  postedAt: string;
+  postedAt?: string;
   employmentType: string;
   industry: string;
   applicationSupport: "assisted" | "simulated" | "external";
