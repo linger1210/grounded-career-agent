@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { autoPrepareApplications, getAutoPreparationReadiness } from "../lib/automation";
 import { initialAppState } from "../lib/demo";
 import {
   assessCareerLevel,
@@ -15,6 +16,7 @@ import {
   detectEvidenceConflicts,
   enforceQuota,
   hasConsent,
+  isSafeEmployerUrl,
   learnPreferenceFromFeedback,
   normalizeAnnualSalary,
   parsePreferenceSentence,
@@ -25,6 +27,7 @@ import {
   validateResumeClaims,
 } from "../lib/domain";
 import { classifyConversationFormat, isSupportedCareerFile, previewTextContent } from "../lib/file-parsing";
+import { normalizeGreenhouseBoardToken } from "../lib/job-sources/greenhouse";
 
 test("file parsing accepts each promised MVP import extension and previews text safely", () => {
   for (const file of ["resume.pdf", "resume.docx", "notes.txt", "portfolio.md", "deck.pptx", "skills.xlsx", "jobs.csv", "certificate.png", "chat.json", "export.html"]) {
@@ -95,6 +98,22 @@ test("job deduplication uses canonical URL, requisition, and role-location ident
   assert.equal(deduplicateJobs([...initialAppState.jobs, duplicate]).length, initialAppState.jobs.length);
 });
 
+test("real employer handoff accepts only secure public URLs", () => {
+  assert.equal(isSafeEmployerUrl("https://jobs.example.com/apply/123"), true);
+  assert.equal(isSafeEmployerUrl("http://jobs.example.com/apply/123"), false);
+  assert.equal(isSafeEmployerUrl("javascript:alert(1)"), false);
+  assert.equal(isSafeEmployerUrl("https://localhost/apply"), false);
+  assert.equal(isSafeEmployerUrl("https://127.0.0.1/apply"), false);
+  assert.equal(isSafeEmployerUrl("https://192.168.1.10/apply"), false);
+});
+
+test("Greenhouse connections accept official board names and URLs only", () => {
+  assert.equal(normalizeGreenhouseBoardToken("example-company"), "example-company");
+  assert.equal(normalizeGreenhouseBoardToken("https://boards.greenhouse.io/example-company/jobs/123"), "example-company");
+  assert.equal(normalizeGreenhouseBoardToken("https://job-boards.greenhouse.io/example-company"), "example-company");
+  assert.throws(() => normalizeGreenhouseBoardToken("https://evil.example/example-company"));
+});
+
 test("match explanations contain only the requested concise fields and three gaps", () => {
   const explanation = buildMatchExplanation({ ...initialAppState.matches[2], gaps: ["One", "Two", "Three", "Four"] });
   assert.equal(explanation.gaps.length, 3);
@@ -127,6 +146,56 @@ test("scheduled runs stop while paused and produce a short report when active", 
   const result = runScheduledSearch({ enabled: true, paused: false, found: 42, matched: 11, prepared: 6, submitted: 3 });
   assert.equal(result.ran, true);
   assert.match(result.report ?? "", /42 jobs found/);
+});
+
+test("automatic preparation queues live jobs but never submits employer forms", () => {
+  const state = structuredClone(initialAppState);
+  const liveJob = {
+    ...state.jobs[0],
+    id: "job-live-safe",
+    sourceId: "official-live",
+    sourceLabel: "Official employer site",
+    sourceKind: "public-career-page" as const,
+    canonicalUrl: "https://careers.example.com/jobs/123",
+    applicationSupport: "external" as const,
+  };
+  state.resumeContent = { ...state.resumeContent!, personalized: true };
+  state.schedule.paused = false;
+  state.jobs = [liveJob];
+  state.matches = [{ ...state.matches[0], id: "match-live-safe", jobId: liveJob.id, decision: "Apply" }];
+  state.applications = [];
+  assert.equal(getAutoPreparationReadiness(state).ready, true);
+  const first = autoPrepareApplications(state, "2026-07-23T08:30:00+08:00");
+  assert.equal(first.report.prepared, 1);
+  assert.equal(first.report.submitted, 0);
+  assert.equal(first.state.applications[0].status, "Needs Review");
+  assert.equal(first.state.applications[0].submittedByUser, false);
+  const duplicateRun = autoPrepareApplications(first.state, "2026-07-24T08:30:00+08:00");
+  assert.equal(duplicateRun.report.prepared, 0);
+});
+
+test("automatic preparation blocks demo-only, paused, and hard-visa-blocked work", () => {
+  const demoReadiness = getAutoPreparationReadiness(initialAppState);
+  assert.equal(demoReadiness.ready, false);
+  assert.ok(demoReadiness.blockers.includes("Connect a personal resume"));
+  assert.ok(demoReadiness.blockers.includes("Connect at least one live employer job"));
+
+  const state = structuredClone(initialAppState);
+  const blockedJob = {
+    ...state.jobs[0],
+    id: "job-live-blocked",
+    sourceKind: "public-career-page" as const,
+    canonicalUrl: "https://careers.example.com/jobs/blocked",
+    applicationSupport: "external" as const,
+    visaFit: "Sponsorship clearly unavailable" as const,
+  };
+  state.resumeContent = { ...state.resumeContent!, personalized: true };
+  state.schedule.paused = false;
+  state.jobs = [blockedJob];
+  state.matches = [{ ...state.matches[0], jobId: blockedJob.id, decision: "Apply" }];
+  state.applications = [];
+  const result = autoPrepareApplications(state);
+  assert.equal(result.report.prepared, 0);
 });
 
 test("user consent remains separate and anonymous analytics starts disabled", () => {

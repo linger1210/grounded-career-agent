@@ -93,6 +93,21 @@ export function deduplicateJobs<T extends JobPosting>(jobs: T[]) {
   });
 }
 
+export function isSafeEmployerUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "::1" || hostname.endsWith(".local")) return false;
+    if (/^(127\.|10\.|192\.168\.|169\.254\.)/.test(hostname)) return false;
+    const private172 = hostname.match(/^172\.(\d{1,3})\./);
+    if (private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31) return false;
+    return hostname.includes(".");
+  } catch {
+    return false;
+  }
+}
+
 export function canSubmitApplication(input: {
   mode: "Recommend Only" | "Review Before Applying" | "Automatic Apply";
   hardRequirementsMet: boolean;

@@ -65,7 +65,7 @@ export interface CareerPreference {
   countries: string[];
   targetRoles: string[];
   openToCareerChange: boolean;
-  requiresSponsorship: boolean;
+  requiresSponsorship: boolean | null;
   workModes: Array<"Remote" | "Hybrid" | "On-site">;
   applicationMode: ApplicationMode;
   salaryPriority: "Get Hired Faster" | "Balanced" | "Maximize Salary";
@@ -98,7 +98,7 @@ export interface WorkAuthorization {
   nationality?: string;
   currentCountry?: string;
   existingAuthorization?: string;
-  requiresSponsorship: boolean;
+  requiresSponsorship: boolean | null;
   acceptableVisaTypes: string[];
   willingToRelocate: boolean;
   noticePeriod?: string;
@@ -201,7 +201,7 @@ export interface JobPosting {
   title: string;
   location: string;
   country: string;
-  remotePolicy: "Remote" | "Hybrid" | "On-site";
+  remotePolicy: "Remote" | "Hybrid" | "On-site" | "Not stated";
   salaryLow?: number;
   salaryHigh?: number;
   salaryCurrency?: string;
@@ -213,7 +213,7 @@ export interface JobPosting {
   requisitionId: string;
   canonicalUrl: string;
   description: string;
-  postedAt: string;
+  postedAt?: string;
   employmentType: string;
   industry: string;
   applicationSupport: "assisted" | "simulated" | "external";
@@ -239,6 +239,37 @@ export interface Resume {
   name: string;
   kind: "master" | "country" | "role" | "job";
   currentVersionId: string;
+}
+
+export interface ResumeExperience {
+  company: string;
+  context?: string;
+  title: string;
+  startDate: string;
+  endDate: string;
+  location?: string;
+  bullets: string[];
+}
+
+export interface ResumeContent {
+  personalized: boolean;
+  sourceFile: string;
+  name: string;
+  professionalTitle: string;
+  location: string;
+  relocation?: string;
+  phone?: string;
+  email?: string;
+  linkedIn?: string;
+  summary: string;
+  capabilityGroups: Array<{ label: string; items: string[] }>;
+  experiences: ResumeExperience[];
+  projects: string[];
+  earlierExperience: string[];
+  education: string[];
+  certifications: string[];
+  awards: string[];
+  languages: string[];
 }
 
 export interface ResumeVersion {
@@ -290,6 +321,8 @@ export interface Application {
   followUpDate?: string;
   failureReason?: string;
   simulated: boolean;
+  jobUrl?: string;
+  submittedByUser?: boolean;
 }
 
 export interface ApplicationAnswer {
@@ -311,6 +344,14 @@ export interface ScheduledRun {
   dailyLimit: number;
   lowChanceLimit: number;
   lastRunAt?: string;
+  lastReport?: {
+    discovered: number;
+    matched: number;
+    prepared: number;
+    submitted: number;
+    blockers: string[];
+    warnings: string[];
+  };
   retryRule: string;
 }
 
@@ -378,6 +419,7 @@ export interface AppState {
   matches: JobMatch[];
   applications: Application[];
   resume: Resume;
+  resumeContent?: ResumeContent;
   resumeVersions: ResumeVersion[];
   resumeChanges: ResumeChange[];
   defenseCards: InterviewDefenseCard[];

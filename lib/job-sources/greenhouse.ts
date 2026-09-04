@@ -13,13 +13,31 @@ type GreenhouseJob = {
   offices?: Array<{ name: string }>;
 };
 
+export function normalizeGreenhouseBoardToken(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("A Greenhouse board name or URL is required");
+  if (!trimmed.includes("://")) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) throw new Error("Enter a valid Greenhouse board name");
+    return trimmed;
+  }
+  const url = new URL(trimmed);
+  const hostname = url.hostname.toLowerCase();
+  const allowedHosts = new Set(["boards.greenhouse.io", "job-boards.greenhouse.io", "boards.eu.greenhouse.io"]);
+  if (url.protocol !== "https:" || !allowedHosts.has(hostname)) throw new Error("Use an official Greenhouse board URL");
+  const token = url.pathname.split("/").filter(Boolean)[0] ?? "";
+  if (!/^[a-zA-Z0-9_-]+$/.test(token)) throw new Error("The Greenhouse board URL is missing its company name");
+  return token;
+}
+
 export class GreenhousePublicBoardAdapter implements JobSourceAdapter<GreenhouseJob> {
   id: string;
   label: string;
   live = true;
 
   constructor(private boardToken: string, private companyName: string) {
-    this.id = `greenhouse-${boardToken}`;
+    this.boardToken = normalizeGreenhouseBoardToken(boardToken);
+    this.companyName = companyName.trim();
+    this.id = `greenhouse-${this.boardToken}`;
     this.label = `${companyName} public careers board`;
   }
 

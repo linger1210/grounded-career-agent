@@ -11,8 +11,10 @@ The included demonstration account follows a Malaysian senior data analyst targe
 - Evidence ledger with source references, confidence, confirmation, privacy, resume-use, and employer-use controls
 - Conflict detection and explicit user resolution
 - Seniority, salary, career-change, visa, and explainable job-match views
-- Mock job-source adapter with simulated application submission
-- Public Greenhouse Job Board API adapter for permitted job discovery
+- Mock job-source adapter with clearly labeled simulated application submission
+- Public Greenhouse Job Board API connection for permitted live job discovery
+- Universal official-job-link import with a controlled employer-site handoff
+- Real application tracking that records `Submitted` only after the user confirms the employer form was sent
 - Truthful resume side-by-side comparison, change review, interview-defense cards, and real PDF/DOCX downloads
 - Application tracker, limits, pause control, audit history, feedback, and outcome-ready models
 - D1-backed state, R2-backed authorized file copies, schema migrations, and typed domain models
@@ -64,7 +66,7 @@ The suite covers file types, conversation classification, structured AI output v
 
 Important AI recommendations use strict schemas. The AI layer produces a recommendation; deterministic rules decide whether preparation or submission is allowed. The AI layer never submits directly. Application actions create an audit record with the provider, prompt version, evidence IDs, and result; hidden reasoning is never stored.
 
-The Greenhouse adapter uses the official public Job Board API GET endpoints. Those endpoints require no authentication for public board data. The adapter deliberately does not submit applications or read applicant status because that would require employer-controlled credentials and additional authorization: <https://developers.greenhouse.io/job-board.html>.
+The Greenhouse adapter uses the official public Job Board API GET endpoints. Those endpoints require no authentication for public board data. The adapter deliberately does not submit applications or read applicant status because that requires employer-controlled credentials and job-specific authorization. Grounded instead opens the employer's official application page, leaves the final submission to the user, and records the result only after explicit confirmation: <https://developers.greenhouse.io/job-board.html>.
 
 ## Production deployment
 
@@ -93,6 +95,7 @@ For another Cloudflare-compatible host, preserve the `dist/server/index.js` work
 - TXT, Markdown, CSV, JSON, and HTML can be previewed as text. PDF, DOCX, PPTX, XLSX, and images currently receive metadata preview and authorized storage; production-grade binary parsing, OCR, malware scanning, and extraction workers remain the next ingestion milestone.
 - Default jobs and salary ranges are seeded demonstration data, not live market evidence.
 - Greenhouse integration supports public discovery only and needs a known company board token.
+- Real employer handoff opens the official application page; it does not prefill or press the employer's final submit button.
 - Scheduling runs interactively in the MVP; a production queue/cron worker and notification service are not wired.
 - PDF/DOCX resume exports use the confirmed demonstration profile; a production renderer should generate arbitrary layouts from stored evidence.
 - ChatGPT identity headers are supported when hosted in Sites, but local development uses the demonstration account.
